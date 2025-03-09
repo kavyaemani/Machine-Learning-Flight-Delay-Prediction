@@ -1,7 +1,3 @@
-Below is a concise **README.md** style write-up you could place on GitHub. It explains your flight delay prediction project’s workflow and clarifies that **class weighting** (not up/down sampling) is used in the code snippet you’ve shown.
-
----
-
 # Flight Delay Prediction
 
 This project explores various machine learning methods to predict flight delays using a dataset of flight records. Our goal is to handle class imbalance (delays vs. non-delays) by **assigning higher weights** to the minority class rather than performing up/down sampling.
