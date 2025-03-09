@@ -1,0 +1,154 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+df <- read.csv("full_data_flightdelay.csv")
+head(df)
+```
+
+```{r}
+# drop duplicates
+df <- df[!duplicated(df), ]
+dim(df)
+```
+
+```{r}
+library(caret)
+set.seed(1234)
+index <- createDataPartition(df$DEP_DEL15, p = 0.01, list = FALSE)
+df_sample <- df[index, ]
+```
+
+```{r}
+dim(df_sample)
+```
+
+
+```{r}
+train <- df_sample
+```
+
+```{r}
+# create new feature - season
+season <- c(
+  "12" = "Winter", "1" = "Winter", "2" = "Winter",
+  "3" = "Spring", "4" = "Spring", "5" = "Spring",
+  "6" = "Summer", "7" = "Summer", "8" = "Summer",
+  "9" = "Fall", "10" = "Fall", "11" = "Fall"
+)
+train$SEASON <- season[as.character(train$MONTH)]
+```
+
+
+```{r}
+# because PREVIOUS_AIRPORT has a large number of unique values, it would create high dimension if using one hot encoding. frequency encoding is used for this variable.
+train$PREVIOUS_AIRPORT_FREQ <- table(train$PREVIOUS_AIRPORT)[train$PREVIOUS_AIRPORT]
+```
+
+```{r}
+# through EDA, we notice there is clear trend of delay probability versus departure time block. convert time block to numeric to represent ordinal character
+train$DEP_TIME_START <- as.numeric(sub("-.*", "", train$DEP_TIME_BLK))
+train$DEP_TIME_START <- ifelse(train$DEP_TIME_START %% 100 == 0, train$DEP_TIME_START / 100, train$DEP_TIME_START)
+train[c('DEP_TIME_BLK', 'DEP_TIME_START')]
+```
+
+```{r}
+train$CARRIER_NAME_FREQ <- table(train$CARRIER_NAME)[train$CARRIER_NAME]
+train$DEPARTING_AIRPORT_FREQ <- table(train$DEPARTING_AIRPORT)[train$DEPARTING_AIRPORT]
+```
+
+
+```{r}
+train$DEP_DEL15 <- as.factor(train$DEP_DEL15)
+train$DISTANCE_GROUP <- as.factor(train$DISTANCE_GROUP)
+train$SEGMENT_NUMBER <- as.factor(train$SEGMENT_NUMBER)
+train$DEP_TIME_START <- as.factor(train$DEP_TIME_START)
+train$MONTH <- as.factor(train$MONTH)
+train$DAY_OF_WEEK <- as.factor(train$DAY_OF_WEEK)
+# standardize numeric predictors
+numeric_cols <- sapply(train, is.numeric)
+train[numeric_cols]<-sapply(train[numeric_cols], function(x) (x-mean(x))/sd(x))
+train
+```
+
+```{r}
+library(dplyr)
+train <- train %>%
+  select(-c(DEP_TIME_BLK, CARRIER_NAME, DEPARTING_AIRPORT, PREVIOUS_AIRPORT))
+```
+
+```{r}
+logit_model <- glm(DEP_DEL15 ~ ., data = train, family = binomial)
+
+summary(logit_model)
+```
+
+```{r}
+drop1(logit_model, test = "Chisq")
+```
+
+```{r}
+alias(logit_model)
+```
+
+
+```{r}
+train_2 <- train <- train %>%
+  select(-c(SEASON))
+
+logit_model2 <- glm(DEP_DEL15 ~ ., data = train_2, family = binomial)
+
+
+summary(logit_model2)
+```
+
+```{r}
+vif(logit_model2)
+```
+
+```{r}
+drop1(logit_model2, test = "Chisq")
+vif(logit_model2)
+```
+
+
+```{r}
+train_2 <- train_2 %>%
+  select(-c(AIRPORT_FLIGHTS_MONTH, AIRLINE_FLIGHTS_MONTH, AVG_MONTHLY_PASS_AIRPORT, AVG_MONTHLY_PASS_AIRLINE, PREVIOUS_AIRPORT_FREQ, CARRIER_NAME_FREQ, DEPARTING_AIRPORT_FREQ))
+```
+
+```{r}
+logit_model3 <- glm(DEP_DEL15 ~ ., data = train_2, family = binomial)
+
+summary(logit_model3)
+```
+
+```{r}
+drop1(logit_model3, test = "Chisq")
+```
+
+
+Can remove the not significant one..
+```{r}
+data_significant <- train_2 %>%
+  select(-c(CONCURRENT_FLIGHTS, AIRLINE_AIRPORT_FLIGHTS_MONTH, FLT_ATTENDANTS_PER_PASS, LATITUDE, LONGITUDE))
+```
+
+```{r}
+data_significant
+```
+
+
+```{r}
+cor_matrix <- cor(data_significant[, sapply(data_significant, is.numeric)])
+print(cor_matrix)
+```
+
+```{r}
+write.csv(data_significant, "data_for_modeling_clean.csv", row.names = FALSE)
+```
+
