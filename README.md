@@ -1,61 +1,79 @@
-# Machine Learning Flight Delay Prediction
+Below is a concise **README.md** style write-up you could place on GitHub. It explains your flight delay prediction project’s workflow and clarifies that **class weighting** (not up/down sampling) is used in the code snippet you’ve shown.
 
-This project predicts flight delays using various machine learning models implemented in R. Our workflow includes data cleaning, feature engineering, handling class imbalance through upsampling, and model training/evaluation using Logistic Regression, Neural Networks, Decision Trees, Random Forest, and XGBoost (including weighted versions).
+---
 
-## Overview
+# Flight Delay Prediction
 
-- **Data:**  
-  We use a cleaned dataset (`data_for_modeling_clean.csv`) containing flight information such as month, day of week, departure time, distance, number of seats, weather conditions, and more. The target variable, `DEP_DEL15`, indicates whether a flight is delayed (1) or on time (0).
+This project explores various machine learning methods to predict flight delays using a dataset of flight records. Our goal is to handle class imbalance (delays vs. non-delays) by **assigning higher weights** to the minority class rather than performing up/down sampling.
 
-- **Preprocessing:**  
-  - **Duplicates & Missing Values:** Duplicate rows were removed and missing values were handled.  
-  - **Feature Transformation:** Categorical features (e.g., MONTH, DAY_OF_WEEK, DEP_TIME_START) were converted to factors.  
-  - **Upsampling:** Due to class imbalance (52302 on-time vs. 12288 delays), we upsampled the minority class so that both classes have equal representation in the training data.
+## 1. Overview
 
-- **Modeling:**  
-  We split the data into training (80%) and test (20%) sets using stratified sampling to preserve class distribution. Models are tuned using stratified 5-fold cross-validation. Our evaluation focuses on metrics robust for imbalanced data (ROC AUC, Precision, Recall, F1-score).  
-  - **Logistic Regression** was used as a baseline and to assist with feature selection.  
-  - **Neural Networks** and **Decision Trees** were experimented with to capture non-linear relationships.  
-  - **Random Forest** and **XGBoost** (including a weighted XGBoost variant to further address imbalance) achieved competitive performance.
+- **Dataset:**  
+  - The dataset contains numeric and categorical features (e.g., `MONTH`, `DAY_OF_WEEK`, `DISTANCE_GROUP`, `PLANE_AGE`, `DEP_TIME_START`, etc.).
+  - The target variable is `DEP_DEL15` (0 = on-time, 1 = delayed).
 
-- **Probability Correction:**  
-  Since training is done on upsampled data, we apply a correction to the predicted probabilities (using Bayes’ formula) to adjust for the original population imbalance.
+- **Imbalance Handling:**  
+  - Instead of upsampling or downsampling, we apply **class weighting** in Random Forest (`classwt`) and XGBoost (`scale_pos_weight`) to penalize misclassifications of the minority class more heavily.
 
-## How to Run
+- **Modeling Techniques:**
+  1. **Logistic Regression** – Baseline model.
+  2. **Neural Network (nnet)** – Explores non-linear relationships.
+  3. **Decision Tree (rpart)** – Simple, interpretable model with potential for bias on imbalanced data.
+  4. **Random Forest (randomForest)** – Ensemble approach with built-in weighting (`classwt`) to handle imbalance.
+  5. **XGBoost** – Gradient boosting method, uses `scale_pos_weight` to adjust for class imbalance.
 
-1. **Requirements:**  
-   Install the following R packages:
-   - caret
-   - nnet
-   - rpart
-   - MLmetrics
-   - gbm
-   - randomForest
-   - xgboost
-   - dplyr
-   - DT
-   - pROC
+## 2. Key Steps in the Code
 
-2. **Execution:**  
-   Open the provided R Notebook or run the scripts in R. The code is organized into sections:
-   - Data loading, cleaning, and feature transformation
-   - Handling class imbalance (upsampling)
-   - Train-Test splitting (with stratification)
-   - Model training (including cross-validation and hyperparameter tuning)
-   - Performance evaluation and probability correction
+1. **Data Loading & Cleaning:**
+   - Read `data_for_modeling_clean.csv`.
+   - Remove duplicates (`df <- df[!duplicated(df), ]`).
+   - Convert relevant columns to factors (e.g., `DEP_DEL15`, `MONTH`, etc.).
+   - Split into **train** and **test** sets using stratified sampling (`createDataPartition`).
 
-## Results
+2. **Feature Scaling (Optional):**
+   - Standardize numeric variables in the training set.
+   - Apply the same scaling to the test set to prevent data leakage.
 
-- **Logistic Regression:** Achieved an overall test accuracy of ~81% with high AUC, but low recall for the minority class.
-- **Neural Network & Decision Tree:** Provided insights into non-linear effects but struggled with minority class recall.
-- **Random Forest & XGBoost:** The weighted XGBoost model showed strong performance in distinguishing delays, with cross-validated ROC AUC close to 0.93.  
-  *Note:* Although unweighted models achieved higher accuracy on the balanced data, probability correction is required to reflect true class distributions, impacting metrics like recall and F1-score.
+3. **Model Training:**
+   - **Logistic Regression:** Fit a baseline GLM model, evaluate on test data.
+   - **Neural Network:** Perform cross-validation to tune size (hidden neurons) and decay, then train a final model.
+   - **Decision Tree:** Use `rpart` with cross-validation to find the best complexity parameter (cp). Optionally, apply `loss` matrix for weighting.
+   - **Random Forest:** Train with `randomForest(..., classwt = c("0"=1, "1"=2))` or other ratios to handle imbalance.
+   - **XGBoost:** Convert data to matrix form (`model.matrix`), set parameters (like `scale_pos_weight = 2`), run `xgb.cv` for best iteration, and train a final model.
 
-## Conclusion
+4. **Evaluation Metrics:**
+   - **Accuracy** – Overall correctness of predictions.
+   - **Precision** – Of flights predicted delayed, how many are actually delayed?
+   - **Recall** – Of flights that are truly delayed, how many does the model catch?
+   - **F1-Score** – Harmonic mean of precision and recall, balances both.
+   - **ConfusionMatrix (caret)** – Summarizes predictions vs. actual classes.
 
-This project demonstrates a comprehensive workflow for flight delay prediction. By addressing class imbalance through upsampling and applying probability correction, we ensure that our final models accurately reflect the original data distribution. Our experiments highlight the importance of balancing overall accuracy with metrics such as Recall and F1-score, especially in imbalanced classification scenarios.
+5. **Model Comparison:**
+   - Results (Accuracy, Precision, Recall, F1) are stored and compared across models.
+   - Weighted approaches often improve recall at the expense of accuracy or precision.
 
-## Contact
+## 3. How to Run
 
-Feel free to open issues or pull requests for further improvements.
+1. **Install Packages** (if needed):
+   ```r
+   install.packages(c("caret", "nnet", "rpart", "MLmetrics", "gbm", "randomForest", "xgboost"))
+   ```
+2. **Execute the R Notebook or Script** that contains the above code.  
+3. **Inspect Model Outputs**:
+   - Compare Accuracy, Precision, Recall, and F1-Score to decide the best approach for your flight delay use case.
 
+## 4. Insights
+
+- **High Accuracy Doesn’t Always Help**: With imbalanced data, focusing on accuracy can result in extremely low recall for the minority class.  
+- **Class Weighting**: By penalizing misclassifications of delayed flights, we improve recall but often reduce overall accuracy.  
+- **Threshold Tuning**: Adjusting the 0.5 decision threshold can further balance precision and recall.
+
+## 5. License & Contributions
+
+- Feel free to open issues or PRs if you have suggestions or improvements.
+- Licensed under [MIT License](LICENSE).
+
+---
+
+**Why No Upsampling?**  
+This code demonstrates using **class weights** instead of up/down sampling. Class weighting modifies the learning process to pay extra attention to the minority class. This often simplifies the workflow, avoids artificially replicating data, and can yield better recall for delayed flights.
