@@ -14,9 +14,12 @@ This project explores various machine learning methods to predict flight delays 
 - **Modeling Techniques:**
   1. **Logistic Regression** – Baseline model.
   2. **Neural Network (nnet)** – Explores non-linear relationships.
-  3. **Decision Tree (rpart)** – Simple, interpretable model with potential for bias on imbalanced data.
-  4. **Random Forest (randomForest)** – Ensemble approach with built-in weighting (`classwt`) to handle imbalance.
-  5. **XGBoost** – Gradient boosting method, uses `scale_pos_weight` to adjust for class imbalance.
+  3. **K Nearest Neighbor**
+  4. **Generalized Additive Models(GAM)**
+  5. **Boosted Tree**
+  6. **Decision Tree (rpart)** – Simple, interpretable model with potential for bias on imbalanced data.
+  7. **Random Forest (randomForest)** – Ensemble approach with built-in weighting (`classwt`) to handle imbalance.
+  8. **XGBoost** – Gradient boosting method, uses `scale_pos_weight` to adjust for class imbalance.
 
 ## 2. Key Steps in the Code
 
