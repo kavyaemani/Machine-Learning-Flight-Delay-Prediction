@@ -1,0 +1,872 @@
+---
+title: "Machine Learning Project Modeling"
+output: html_document
+knitr:
+  opts_chunk:
+    cache: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, eval = FALSE)
+```
+
+```{r}
+library(caret)
+library(rpart)
+library(nnet)
+library(ALEPlot)
+library(class)
+library(mgcv)
+library(gbm)
+library(MLmetrics)
+library(randomForest)
+library(xgboost)
+library(yaImpute)
+```
+
+```{r}
+data <- read.csv("data_for_modeling_clean.csv", header = TRUE)
+data$DEP_DEL15 <- factor(data$DEP_DEL15, levels = c(0, 1), labels = c("No", "Yes"))
+```
+
+Train Test Split
+
+```{r}
+set.seed(1234)
+trainIndex <- createDataPartition(data$DEP_DEL15, p = 0.8, list = FALSE)
+train_data <- data[trainIndex, ]
+test_data <- data[-trainIndex, ]
+```
+
+Standardize data
+
+```{r}
+numeric_vars <- sapply(data, is.numeric)
+train_mean <- colMeans(train_data[, numeric_vars], na.rm = TRUE)
+train_sd <- apply(train_data[, numeric_vars], 2, sd, na.rm = TRUE)
+train_data[, numeric_vars] <- scale(train_data[, numeric_vars], center = train_mean, scale = train_sd)
+
+# scale the test data using the train mean and sd to prevent data leakage
+test_data[, numeric_vars] <- scale(test_data[, numeric_vars], center = train_mean, scale = train_sd)
+```
+
+```{r, eval=TRUE, echo=TRUE}
+str(train_data)
+```
+
+To store the result
+```{r}
+model_results_df <- data.frame(
+  Model = character(),
+  Accuracy = numeric(),
+  Precision = numeric(),
+  Recall = numeric(),
+  F1_Score = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Function to add results
+add_model_results <- function(model_name, acc, prec, rec, f1) {
+  new_row <- data.frame(
+    Model = model_name,
+    Accuracy = round(acc, 4),
+    Precision = round(prec, 4),
+    Recall = round(rec, 4),
+    F1_Score = round(f1, 4)
+  )
+  return(rbind(model_results_df, new_row))
+}
+```
+
+
+# 1. Baseline
+```{r, eval=TRUE, echo=TRUE}
+prop.table(table(train_data$DEP_DEL15))
+```
+
+# 2. Logistic Regression
+```{r}
+train_control <- trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary)
+
+logistic_model <- train(DEP_DEL15 ~ ., data = train_data, method = "glm", family = binomial, trControl = train_control, metric = "ROC")
+
+# Predict on test set
+predictions <- predict(logistic_model, test_data)
+conf_matrix <- confusionMatrix(predictions, test_data$DEP_DEL15, positive = "Yes")
+
+# Store results
+model_results_df <- add_model_results("Logistic Regression", 
+                                      conf_matrix$overall["Accuracy"], 
+                                      conf_matrix$byClass["Precision"], 
+                                      conf_matrix$byClass["Recall"], 
+                                      conf_matrix$byClass["F1"])
+```
+
+# 3. Classification Tree
+```{r}
+control <- rpart.control(minbucket = 5, cp = 0.0001, maxsurrogate = 0, usesurrogate = 0, xval = 10)
+tree_model <- rpart(DEP_DEL15 ~ ., data = train_data, method = "class", control = control)
+plotcp(tree_model)
+```
+
+```{r}
+best_cp <- tree_model$cptable[which.min(tree_model$cptable[, "xerror"]), "CP"]
+prune_tree <- prune(tree_model, cp = best_cp)
+prune_tree$variable.importance
+```
+
+```{r, eval=TRUE, echo=TRUE}
+plotcp(tree_model)
+```
+
+```{r, eval=TRUE, echo=TRUE}
+prune_tree$variable.importance
+```
+
+```{r}
+cp_table_prune_tree = prune_tree$cptable[nrow(prune_tree$cptable),]
+missclassified_cv_tree <- cp_table_prune_tree['xerror'] * (1 - max(prop.table(table(train_data$DEP_DEL15))))
+missclassified_cv_tree
+```
+
+```{r display_results, eval=TRUE, echo=TRUE}
+missclassified_cv_tree
+```
+
+```{r}
+test_preds <- predict(prune_tree, test_data, type = "class")
+conf_matrix_tree <- confusionMatrix(test_preds, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("Decision Tree", 
+                                      conf_matrix_tree$overall["Accuracy"], 
+                                      conf_matrix_tree$byClass["Precision"], 
+                                      conf_matrix_tree$byClass["Recall"], 
+                                      conf_matrix_tree$byClass["F1"])
+```
+
+### Classification Tree with Modified Weight
+```{r}
+tree_model_weighted <- rpart(DEP_DEL15 ~ ., data = train_data, method = "class",
+                             control = rpart.control(cp = best_cp),
+                             parms = list(loss = matrix(c(0, 2, 1, 0), nrow = 2)))
+```
+
+```{r}
+test_preds_tree_weighted <- predict(tree_model_weighted, test_data, type = "class")
+conf_matrix_tree_weighted <- confusionMatrix(test_preds_tree_weighted, test_data$DEP_DEL15, positive = "Yes")
+
+# Store results
+model_results_df <- add_model_results("Decision Tree Weighted Ration 2:1", 
+                                      conf_matrix_tree_weighted$overall["Accuracy"], 
+                                      conf_matrix_tree_weighted$byClass["Precision"], 
+                                      conf_matrix_tree_weighted$byClass["Recall"], 
+                                      conf_matrix_tree_weighted$byClass["F1"])
+```
+
+### Try Ratio 3:1 and 4:1 because the ratio of the imbalance class is 4:1
+
+```{r}
+tree_model_weighted_2 <- rpart(DEP_DEL15 ~ ., data = train_data, method = "class",
+                             control = rpart.control(cp = best_cp),
+                             parms = list(loss = matrix(c(0, 3, 1, 0), nrow = 2)))
+```
+
+```{r}
+test_preds_tree_weighted_2 <- predict(tree_model_weighted_2, test_data, type = "class")
+conf_matrix_tree_weighted_2 <- confusionMatrix(test_preds_tree_weighted_2, test_data$DEP_DEL15, positive = "Yes")
+
+# Store results
+model_results_df <- add_model_results("Decision Tree Weighted Ration 3:1", 
+                                      conf_matrix_tree_weighted_2$overall["Accuracy"], 
+                                      conf_matrix_tree_weighted_2$byClass["Precision"], 
+                                      conf_matrix_tree_weighted_2$byClass["Recall"], 
+                                      conf_matrix_tree_weighted_2$byClass["F1"])
+```
+
+```{r}
+tree_model_weighted_3 <- rpart(DEP_DEL15 ~ ., data = train_data, method = "class",
+                             control = rpart.control(cp = best_cp),
+                             parms = list(loss = matrix(c(0, 4, 1, 0), nrow = 2)))
+```
+
+```{r}
+test_preds_tree_weighted_3 <- predict(tree_model_weighted_3, test_data, type = "class")
+conf_matrix_tree_weighted_3 <- confusionMatrix(test_preds_tree_weighted_3, test_data$DEP_DEL15, positive = "Yes")
+
+# Store results
+model_results_df <- add_model_results("Decision Tree Weighted Ration 4:1", 
+                                      conf_matrix_tree_weighted_3$overall["Accuracy"], 
+                                      conf_matrix_tree_weighted_3$byClass["Precision"], 
+                                      conf_matrix_tree_weighted_3$byClass["Recall"], 
+                                      conf_matrix_tree_weighted_3$byClass["F1"])
+```
+
+```{r, eval=TRUE, echo=TRUE}
+tree_model_weighted_3$variable.importance
+```
+
+# 4. Neural Network
+```{r}
+# create the cross validation function
+set.seed(123)
+CVInd <- function(n,K) {
+ m<-floor(n/K) #approximate size of each part
+ r<-n-m*K
+ I<-sample(n,n) #random reordering of the indices
+ Ind<- vector("list", K)
+ for (k in 1:K) {
+ if (k <= r) kpart <- ((m+1)*(k-1)+1):((m+1)*k)
+ else kpart<-((m+1)*r+m*(k-r-1)+1):((m+1)*r+m*(k-r))
+ Ind[[k]] <- I[kpart] #indices for kth part of data
+ }
+ return(Ind)
+}
+```
+
+```{r}
+set.seed(123)
+K <- 5
+hidden_nodes <- c(3, 5, 10)
+decay_values <- c(0.1, 0.3, 0.5)
+n.models <- length(hidden_nodes) * length(decay_values)
+n <- nrow(train_data)
+y <- train_data$DEP_DEL15
+CV_metrics <- matrix(0, n.models, 4)
+model_list <- list()
+
+Ind <- CVInd(n, K)
+model_index <- 1
+for (h in hidden_nodes) {
+  for (d in decay_values) {
+    yhat <- numeric(n)
+    for (k in 1:K) {
+      test_idx <- Ind[[k]]
+      train_idx <- setdiff(1:n, test_idx)
+      
+      nn_model <- nnet(DEP_DEL15 ~ ., data = train_data[train_idx, ], size = h, decay = d, maxit = 500, linout = FALSE, skip = FALSE, trace = FALSE)
+      yhat[test_idx] <- predict(nn_model, train_data[test_idx, ], type = "class")
+    }
+    
+    confusion <- confusionMatrix(factor(yhat), factor(y), positive = "Yes")
+    CV_metrics[model_index, ] <- c(confusion$overall["Accuracy"], confusion$byClass["Precision"], confusion$byClass["Recall"], confusion$byClass["F1"])
+    model_list[[model_index]] <- list(model = nn_model, size = h, decay = d)
+    model_index <- model_index + 1
+  }
+}
+
+# Identify the best model
+best_model_index <- which.max(CV_metrics[, 4]) # best F1 score
+best_model <- model_list[[best_model_index]]$model
+```
+
+```{r}
+best_hideen_nodes <- model_list[[best_model_index]]$size
+best_decay <- model_list[[best_model_index]]$decay
+
+best_nn_model <- nnet(DEP_DEL15 ~ ., data = train_data, size = best_hideen_nodes, decay = best_decay, maxit = 500, linout = FALSE, skip = FALSE, trace = FALSE)
+```
+
+```{r}
+nn_pred <- predict(best_nn_model, test_data, type = "class")
+conf_matrix_nnet <- confusionMatrix(factor(nn_pred), factor(test_data$DEP_DEL15), positive = "Yes")
+
+# Store results
+model_results_df <- add_model_results("Neural Network", 
+                                      conf_matrix_nnet$overall["Accuracy"], 
+                                      conf_matrix_nnet$byClass["Precision"], 
+                                      conf_matrix_nnet$byClass["Recall"], 
+                                      conf_matrix_nnet$byClass["F1"])
+```
+
+```{r, eval=TRUE, echo=TRUE}
+library(ALEPlot)
+
+ale_results <- list()
+feature_names <- colnames(train_data)[colnames(train_data) != "DEP_DEL15"]
+
+pred.fun <- function(X.model, newdata) {
+  predict(best_nn_model, newdata, type = "raw")
+}
+
+par(mfrow = c(2, 2))
+par(mar = c(4, 4, 2, 2))
+
+for (feature in feature_names) {
+  ale_plot <- ALEPlot(
+    X = train_data[, feature_names], 
+    pred.fun = pred.fun, 
+    J = which(feature_names == feature), 
+    K = 50
+  )
+  
+  title(main = paste("ALE Plot for", feature))
+  ale_results[[feature]] <- ale_plot
+}
+
+par(mfrow = c(1, 1))
+```
+
+# 5. K Nearest Neighbours
+```{r}
+set.seed(123)
+K <- 5  # K-fold CV
+k_values <- seq(3, 40, 2)  # Candidate values for k
+n <- nrow(train_data)
+y <- train_data$DEP_DEL15
+X <- train_data[, colnames(train_data) != "DEP_DEL15"]
+CV_metrics <- matrix(0, length(k_values), 4)
+
+Ind <- CVInd(n, K)
+for (i in 1:length(k_values)) {
+  k <- k_values[i]
+  yhat <- factor(rep(NA, n), levels = levels(y))
+  for (fold in 1:K) {
+    test_idx <- Ind[[fold]]
+    train_idx <- setdiff(1:n, test_idx)
+    yhat[test_idx] <- knn(train = X[train_idx, ], test = X[test_idx, ], cl = y[train_idx], k = k)
+  }
+  
+  confusion <- confusionMatrix(yhat, y, positive = "Yes")
+  CV_metrics[i, ] <- c(confusion$overall["Accuracy"], confusion$byClass["Precision"], confusion$byClass["Recall"], confusion$byClass["F1"])
+}
+
+# Identify the best k
+best_k_index <- which.max(CV_metrics[, 4])
+best_k <- k_values[best_k_index]
+
+# Print the best k
+cat("Best k:", best_k, "\n")
+```
+
+```{r}
+X_train <- train_data[, colnames(train_data) != "DEP_DEL15"]
+y_train <- train_data$DEP_DEL15
+X_test <- test_data[, colnames(test_data) != "DEP_DEL15"]
+y_test <- test_data$DEP_DEL15
+
+knn_test_preds <- knn(train = X_train, test = X_test, cl = y_train, k = best_k)
+conf_matrix_knn <- confusionMatrix(knn_test_preds, y_test, positive = "Yes")
+
+model_results_df <- add_model_results("KNN", 
+                                      conf_matrix_knn$overall["Accuracy"], 
+                                      conf_matrix_knn$byClass["Precision"], 
+                                      conf_matrix_knn$byClass["Recall"], 
+                                      conf_matrix_knn$byClass["F1"])
+```
+
+
+# 6. Generalized Additive Model (GAM)
+```{r}
+K <- 5  # K-fold CV
+n <- nrow(train_data)
+y <- train_data$DEP_DEL15
+X <- train_data[, colnames(train_data) != "DEP_DEL15"]
+CV_metrics <- matrix(0, K, 4)
+
+Ind <- CVInd(n, K)
+yhat <- factor(rep(NA, n), levels = levels(y))
+
+numeric_vars <- names(X)[sapply(X, is.numeric)]
+categorical_vars <- names(X)[sapply(X, is.factor)]
+
+gam_formula <- as.formula(paste("DEP_DEL15 ~",
+                                paste(c(
+                                  paste0("s(", numeric_vars, ", k=5)"),
+                                  categorical_vars
+                                ), collapse = " + ")))
+
+for (fold in 1:K) {
+  test_idx <- Ind[[fold]]
+  train_idx <- setdiff(1:n, test_idx)
+  
+  gam_model <- gam(gam_formula, data = train_data[train_idx, ], family = binomial)
+  pred_probs <- predict(gam_model, train_data[test_idx, ], type = "response")
+  yhat[test_idx] <- factor(ifelse(pred_probs > 0.5, "Yes", "No"), levels = levels(y))
+  
+  confusion <- confusionMatrix(yhat[test_idx], y[test_idx], positive = "Yes")
+  CV_metrics[fold, ] <- c(confusion$overall["Accuracy"], confusion$byClass["Precision"], confusion$byClass["Recall"], confusion$byClass["F1"])
+}
+```
+
+```{r}
+best_gam_model <- gam(gam_formula, data = train_data, family = binomial)
+gam_probs <- predict(best_gam_model, test_data, type = "response")
+gam_preds <- factor(ifelse(gam_probs > 0.5, "Yes", "No"), levels = levels(test_data$DEP_DEL15))
+
+conf_matrix_gam <- confusionMatrix(gam_preds, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("GAM", 
+                                      conf_matrix_gam$overall["Accuracy"], 
+                                      conf_matrix_gam$byClass["Precision"], 
+                                      conf_matrix_gam$byClass["Recall"], 
+                                      conf_matrix_gam$byClass["F1"])
+```
+
+
+# 7. Boosted Tree
+Boosted tree has a built in CV already
+```{r}
+gbm1 <- gbm(as.numeric(train_data$DEP_DEL15 == "Yes")~., data = train_data, distribution = "bernoulli", n.trees = 3000,
+            shrinkage = 0.1, interaction.depth = 3, bag.fraction = 0.5, train.fraction = 1,
+            n.minobsinnode = 10, cv.folds = 5, keep.data = TRUE, verbose = FALSE)
+best.iter <- gbm.perf(gbm1, method = "cv")
+```
+
+```{r, eval=TRUE, echo=TRUE}
+best.iter <- gbm.perf(gbm1, method = "cv")
+```
+
+```{r, eval=TRUE, echo=TRUE}
+best.iter
+```
+
+```{r, eval=TRUE, echo=TRUE}
+summary(gbm1, n.trees = best.iter)
+```
+
+```{r}
+gbm1_prob <- predict(gbm1, test_data, n.trees = best.iter, type = "response")
+gbm1_pred <- ifelse(gbm1_prob > 0.5, "Yes", "No")
+gbm1_pred <- factor(gbm1_pred, levels = levels(test_data$DEP_DEL15))
+conf_matrix_gbm1 <- confusionMatrix(gbm1_pred, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("Boosted Tree", 
+                                      conf_matrix_gbm1$overall["Accuracy"], 
+                                      conf_matrix_gbm1$byClass["Precision"], 
+                                      conf_matrix_gbm1$byClass["Recall"], 
+                                      conf_matrix_gbm1$byClass["F1"])
+```
+
+GBM with weights 2:1
+```{r}
+class_weights <- ifelse(train_data$DEP_DEL15 == "Yes", 2, 1)
+gbm2 <- gbm(as.numeric(train_data$DEP_DEL15 == "Yes") ~ ., data = train_data, distribution = "bernoulli", n.trees = 3000, 
+            shrinkage = 0.1, interaction.depth = 3, bag.fraction = 0.5, train.fraction = 1,n.minobsinnode = 10, 
+            cv.folds = 5, keep.data = TRUE, verbose = FALSE,weights = class_weights)
+best.iter2 <- gbm.perf(gbm2, method = "cv")
+```
+
+```{r}
+gbm2_prob <- predict(gbm2, test_data, n.trees = best.iter2, type = "response")
+gbm2_pred <- ifelse(gbm2_prob > 0.5, "Yes", "No")
+gbm2_pred <- factor(gbm2_pred, levels = levels(test_data$DEP_DEL15))
+conf_matrix_gbm2 <- confusionMatrix(gbm2_pred, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("Boosted Tree Weighted Ratio 2:1", 
+                                      conf_matrix_gbm2$overall["Accuracy"], 
+                                      conf_matrix_gbm2$byClass["Precision"], 
+                                      conf_matrix_gbm2$byClass["Recall"], 
+                                      conf_matrix_gbm2$byClass["F1"])
+```
+
+GBM with weights 3:1
+```{r}
+class_weights <- ifelse(train_data$DEP_DEL15 == "Yes", 3, 1)
+gbm3 <- gbm(as.numeric(train_data$DEP_DEL15 == "Yes") ~ ., data = train_data, distribution = "bernoulli", n.trees = 3000, 
+            shrinkage = 0.1, interaction.depth = 3, bag.fraction = 0.5, train.fraction = 1,n.minobsinnode = 10, 
+            cv.folds = 5, keep.data = TRUE, verbose = FALSE,weights = class_weights)
+best.iter3 <- gbm.perf(gbm3, method = "cv")
+```
+
+```{r}
+gbm3_prob <- predict(gbm3, test_data, n.trees = best.iter3, type = "response")
+gbm3_pred <- ifelse(gbm3_prob > 0.5, "Yes", "No")
+gbm3_pred <- factor(gbm3_pred, levels = levels(test_data$DEP_DEL15))
+conf_matrix_gbm3 <- confusionMatrix(gbm3_pred, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("Boosted Tree Weighted Ratio 3:1", 
+                                      conf_matrix_gbm3$overall["Accuracy"], 
+                                      conf_matrix_gbm3$byClass["Precision"], 
+                                      conf_matrix_gbm3$byClass["Recall"], 
+                                      conf_matrix_gbm3$byClass["F1"])
+```
+
+GBM with weights 4:1
+```{r}
+class_weights <- ifelse(train_data$DEP_DEL15 == "Yes", 4, 1)
+gbm4 <- gbm(as.numeric(train_data$DEP_DEL15 == "Yes") ~ ., data = train_data, distribution = "bernoulli", n.trees = 3000, 
+            shrinkage = 0.1, interaction.depth = 3, bag.fraction = 0.5, train.fraction = 1,n.minobsinnode = 10, 
+            cv.folds = 5, keep.data = TRUE, verbose = FALSE,weights = class_weights)
+best.iter4 <- gbm.perf(gbm4, method = "cv")
+```
+
+```{r, eval=TRUE, echo=TRUE}
+summary(gbm4, n.trees = best.iter)
+```
+
+```{r}
+gbm4_prob <- predict(gbm4, test_data, n.trees = best.iter3, type = "response")
+gbm4_pred <- ifelse(gbm4_prob > 0.5, "Yes", "No")
+gbm4_pred <- factor(gbm4_pred, levels = levels(test_data$DEP_DEL15))
+conf_matrix_gbm4 <- confusionMatrix(gbm4_pred, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("Boosted Tree Weighted Ratio 4:1", 
+                                      conf_matrix_gbm4$overall["Accuracy"], 
+                                      conf_matrix_gbm4$byClass["Precision"], 
+                                      conf_matrix_gbm4$byClass["Recall"], 
+                                      conf_matrix_gbm4$byClass["F1"])
+```
+
+
+# 8. Random Forest
+Based on the prof lecture, for RF, the most important hyperparameter is the nodesize. Number of tree won't make it overfit, unlike the Boosted Tree. For the mtry (number of randomized variable), it is mentioned on the lecture that usually we can just set to 1/3 of the total predictor variables.
+```{r}
+# custom f1 score function bcs there is no f1 score on the caret rf
+custom_summary <- function(data, lev = NULL, model = NULL) {
+  precision <- posPredValue(data$pred, data$obs, positive = "Yes")
+  recall <- sensitivity(data$pred, data$obs, positive = "Yes")
+  F1 <- ifelse(precision + recall > 0, 2 * (precision * recall) / (precision + recall), 0)
+  
+  return(c(Accuracy = mean(data$pred == data$obs), Precision = precision, Recall = recall, F1 = F1))
+}
+
+set.seed(123)
+
+train_control <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = custom_summary,  # Use custom F1 function
+  savePredictions = "final"
+)
+
+nodesize_values <- c(3, 5, 10, 15, 20)  
+fixed_mtry <- 4
+
+rf_results <- data.frame(nodesize = nodesize_values, F1 = NA)
+
+for (i in 1:length(nodesize_values)) {
+  
+  rf_model <- train(
+    DEP_DEL15 ~ ., 
+    data = train_data, 
+    method = "rf",
+    trControl = train_control,
+    tuneGrid = expand.grid(mtry = fixed_mtry), 
+    metric = "F1",  
+    importance = TRUE,
+    nodesize = nodesize_values[i],  
+    ntree = 500 
+  )
+
+  rf_results$F1[i] <- max(rf_model$results$F1, na.rm = TRUE)
+}
+
+# Find the best nodesize based on highest F1-score
+best_nodesize <- rf_results$nodesize[which.max(rf_results$F1)]
+
+# Print results
+cat("Best nodesize:", best_nodesize, "\n")
+```
+
+```{r}
+rf_model <- randomForest(DEP_DEL15 ~ ., data = train_data, mtry = 4, ntree = 500, nodesize = best_nodesize, importance = TRUE)
+plot(rf_model)
+```
+
+```{r, eval=TRUE, echo=TRUE}
+importance(rf_model)
+```
+
+
+```{r}
+rf_test_preds <- predict(rf_model, test_data, type = "class")
+conf_matrix_rf <- confusionMatrix(as.factor(rf_test_preds), as.factor(test_data$DEP_DEL15), positive = "Yes")
+
+model_results_df <- add_model_results("Random Forest", 
+                                      conf_matrix_rf$overall["Accuracy"], 
+                                      conf_matrix_rf$byClass["Precision"], 
+                                      conf_matrix_rf$byClass["Recall"], 
+                                      conf_matrix_rf$byClass["F1"])
+```
+
+
+Try weighted RF Model
+```{r}
+rf_model_weighted <- randomForest(DEP_DEL15 ~ ., data = train_data, 
+                                  mtry = 4, ntree = 500, nodesize = best_nodesize, 
+                                  importance = TRUE, classwt = c("No" = 1, "Yes" = 2))
+
+rf_test_preds_weighted <- predict(rf_model_weighted, test_data, type = "class")
+conf_matrix_rf2 <- confusionMatrix(as.factor(rf_test_preds_weighted), as.factor(test_data$DEP_DEL15), positive = "Yes")
+
+model_results_df <- add_model_results("Random Forest Weighted Ratio 2:1", 
+                                      conf_matrix_rf2$overall["Accuracy"], 
+                                      conf_matrix_rf2$byClass["Precision"], 
+                                      conf_matrix_rf2$byClass["Recall"], 
+                                      conf_matrix_rf2$byClass["F1"])
+```
+
+```{r}
+rf_model_weighted3 <- randomForest(DEP_DEL15 ~ ., data = train_data, 
+                                  mtry = 4, ntree = 500, nodesize = best_nodesize, 
+                                  importance = TRUE, classwt = c("No" = 1, "Yes" = 3))
+
+rf_test_preds_weighted3 <- predict(rf_model_weighted3, test_data, type = "class")
+conf_matrix_rf3 <- confusionMatrix(as.factor(rf_test_preds_weighted3), as.factor(test_data$DEP_DEL15), positive = "Yes")
+
+model_results_df <- add_model_results("Random Forest Weighted Ratio 3:1", 
+                                      conf_matrix_rf3$overall["Accuracy"], 
+                                      conf_matrix_rf3$byClass["Precision"], 
+                                      conf_matrix_rf3$byClass["Recall"], 
+                                      conf_matrix_rf3$byClass["F1"])
+```
+
+```{r}
+rf_model_weighted4 <- randomForest(DEP_DEL15 ~ ., data = train_data, 
+                                  mtry = 4, ntree = 500, nodesize = best_nodesize, 
+                                  importance = TRUE, classwt = c("No" = 1, "Yes" = 4))
+
+rf_test_preds_weighted4 <- predict(rf_model_weighted4, test_data, type = "class")
+conf_matrix_rf4 <- confusionMatrix(as.factor(rf_test_preds_weighted4), as.factor(test_data$DEP_DEL15), positive = "Yes")
+
+model_results_df <- add_model_results("Random Forest Weighted Ratio 3:1", 
+                                      conf_matrix_rf4$overall["Accuracy"], 
+                                      conf_matrix_rf4$byClass["Precision"], 
+                                      conf_matrix_rf4$byClass["Recall"], 
+                                      conf_matrix_rf4$byClass["F1"])
+```
+
+```{r, eval=TRUE, echo=TRUE}
+importance(rf_model_weighted4)
+```
+
+# 9. XGBoost
+```{r}
+# XGBoost requires matrix input
+train_matrix <- model.matrix(DEP_DEL15 ~ ., data = train_data)[,-1]  # Remove intercept
+train_label <- ifelse(train_data$DEP_DEL15 == "Yes", 1, 0)
+
+# Convert to XGBoost format
+dtrain <- xgb.DMatrix(data = train_matrix, label = train_label)
+```
+
+```{r}
+params <- list(
+  objective = "binary:logistic", 
+  eval_metric = "logloss",       
+  max_depth = 3,                 
+  eta = 0.1,                      
+  subsample = 0.8,               
+  colsample_bytree = 0.8          
+)
+
+xgb_cv <- xgb.cv(
+  params = params,
+  data = dtrain,
+  nrounds = 500, 
+  nfold = 5, 
+  stratified = TRUE, 
+  verbose = 0,
+  early_stopping_rounds = 10
+)
+
+# best iter
+best_nrounds <- xgb_cv$best_iteration
+print(best_nrounds)
+```
+
+```{r}
+xgb_model <- xgboost(
+  params = params,
+  data = dtrain,
+  nrounds = best_nrounds, 
+  verbose = 0
+)
+
+# Convert test data into XGBoost matrix
+test_matrix <- model.matrix(DEP_DEL15 ~ ., data = test_data)[,-1]
+test_label <- as.numeric(test_data$DEP_DEL15 == "Yes")  
+dtest <- xgb.DMatrix(data = test_matrix, label = test_label)
+xgb_probs <- predict(xgb_model, dtest)
+xgb_preds <- ifelse(xgb_probs > 0.5, "Yes", "No")
+xgb_preds <- factor(xgb_preds, levels = levels(test_data$DEP_DEL15))
+conf_matrix_xgb <- confusionMatrix(xgb_preds, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("XGBoost", 
+                                      conf_matrix_xgb$overall["Accuracy"], 
+                                      conf_matrix_xgb$byClass["Precision"], 
+                                      conf_matrix_xgb$byClass["Recall"], 
+                                      conf_matrix_xgb$byClass["F1"])
+```
+
+Try Weighted XGBoost Weight 2:1
+```{r}
+params <- list(
+  objective = "binary:logistic", 
+  eval_metric = "logloss",       
+  max_depth = 3,                 
+  eta = 0.1,                      
+  subsample = 0.8,               
+  colsample_bytree = 0.8,
+  scale_pos_weight = 2  
+)
+
+xgb_cv_weighted <- xgb.cv(
+  params = params,
+  data = dtrain,
+  nrounds = 500, 
+  nfold = 5, 
+  stratified = TRUE, 
+  verbose = 0,
+  early_stopping_rounds = 10
+)
+
+best_nrounds_weighted <- xgb_cv_weighted$best_iteration
+
+# train the best nrounds
+xgb_model_weighted <- xgboost(
+  params = params,
+  data = dtrain,
+  nrounds = best_nrounds_weighted, 
+  verbose = 0
+)
+```
+
+```{r}
+# Convert test data into XGBoost matrix
+test_matrix <- model.matrix(DEP_DEL15 ~ ., data = test_data)[,-1]
+test_label <- as.numeric(test_data$DEP_DEL15 == "Yes")  
+dtest <- xgb.DMatrix(data = test_matrix, label = test_label)
+
+xgb_probs_weighted <- predict(xgb_model_weighted, dtest)
+xgb_preds_weighted <- ifelse(xgb_probs_weighted > 0.5, "Yes", "No")
+xgb_preds_weighted <- factor(xgb_preds_weighted, levels = levels(test_data$DEP_DEL15))
+
+conf_matrix_xgb_weighted <- confusionMatrix(xgb_preds_weighted, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("XGBoost Weighted Ratio 2:1", 
+                                      conf_matrix_xgb_weighted$overall["Accuracy"], 
+                                      conf_matrix_xgb_weighted$byClass["Precision"], 
+                                      conf_matrix_xgb_weighted$byClass["Recall"], 
+                                      conf_matrix_xgb_weighted$byClass["F1"])
+```
+
+Try Weighted XGBoost Weight 3:1
+```{r}
+params <- list(
+  objective = "binary:logistic", 
+  eval_metric = "logloss",       
+  max_depth = 3,                 
+  eta = 0.1,                      
+  subsample = 0.8,               
+  colsample_bytree = 0.8,
+  scale_pos_weight = 3  
+)
+
+xgb_cv_weighted <- xgb.cv(
+  params = params,
+  data = dtrain,
+  nrounds = 500, 
+  nfold = 5, 
+  stratified = TRUE, 
+  verbose = 0,
+  early_stopping_rounds = 10
+)
+
+best_nrounds_weighted <- xgb_cv_weighted$best_iteration
+
+# train the best nrounds
+xgb_model_weighted <- xgboost(
+  params = params,
+  data = dtrain,
+  nrounds = best_nrounds_weighted, 
+  verbose = 0
+)
+```
+
+```{r}
+# Convert test data into XGBoost matrix
+test_matrix <- model.matrix(DEP_DEL15 ~ ., data = test_data)[,-1]
+test_label <- as.numeric(test_data$DEP_DEL15 == "Yes")  
+dtest <- xgb.DMatrix(data = test_matrix, label = test_label)
+
+xgb_probs_weighted <- predict(xgb_model_weighted, dtest)
+xgb_preds_weighted <- ifelse(xgb_probs_weighted > 0.5, "Yes", "No")
+xgb_preds_weighted <- factor(xgb_preds_weighted, levels = levels(test_data$DEP_DEL15))
+
+conf_matrix_xgb_weighted <- confusionMatrix(xgb_preds_weighted, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("XGBoost Weighted Ratio 3:1", 
+                                      conf_matrix_xgb_weighted$overall["Accuracy"], 
+                                      conf_matrix_xgb_weighted$byClass["Precision"], 
+                                      conf_matrix_xgb_weighted$byClass["Recall"], 
+                                      conf_matrix_xgb_weighted$byClass["F1"])
+```
+
+Try Weighted XGBoost Weight 4:1
+
+```{r}
+params <- list(
+  objective = "binary:logistic", 
+  eval_metric = "logloss",       
+  max_depth = 3,                 
+  eta = 0.1,                      
+  subsample = 0.8,               
+  colsample_bytree = 0.8,
+  scale_pos_weight = 4  
+)
+
+xgb_cv_weighted <- xgb.cv(
+  params = params,
+  data = dtrain,
+  nrounds = 500, 
+  nfold = 5, 
+  stratified = TRUE, 
+  verbose = 0,
+  early_stopping_rounds = 10
+)
+
+best_nrounds_weighted <- xgb_cv_weighted$best_iteration
+
+# train the best nrounds
+xgb_model_weighted <- xgboost(
+  params = params,
+  data = dtrain,
+  nrounds = best_nrounds_weighted, 
+  verbose = 0
+)
+```
+
+```{r}
+# Convert test data into XGBoost matrix
+test_matrix <- model.matrix(DEP_DEL15 ~ ., data = test_data)[,-1]
+test_label <- as.numeric(test_data$DEP_DEL15 == "Yes")  
+dtest <- xgb.DMatrix(data = test_matrix, label = test_label)
+
+xgb_probs_weighted <- predict(xgb_model_weighted, dtest)
+xgb_preds_weighted <- ifelse(xgb_probs_weighted > 0.5, "Yes", "No")
+xgb_preds_weighted <- factor(xgb_preds_weighted, levels = levels(test_data$DEP_DEL15))
+
+conf_matrix_xgb_weighted <- confusionMatrix(xgb_preds_weighted, test_data$DEP_DEL15, positive = "Yes")
+
+model_results_df <- add_model_results("XGBoost Weighted Ratio 4:1", 
+                                      conf_matrix_xgb_weighted$overall["Accuracy"], 
+                                      conf_matrix_xgb_weighted$byClass["Precision"], 
+                                      conf_matrix_xgb_weighted$byClass["Recall"], 
+                                      conf_matrix_xgb_weighted$byClass["F1"])
+```
+
+```{r, eval=TRUE, echo=TRUE}
+feature_names <- colnames(dtrain)
+importance_matrix <- xgb.importance(feature_names = feature_names, model = xgb_model_weighted)
+print(importance_matrix)
+```
+
+
+```{r, eval=TRUE, echo=TRUE}
+model_results_df
+```
+
+```{r, eval=TRUE, echo=TRUE}
+# Load DT package
+library(DT)
+
+# Display table with pagination
+datatable(model_results_df, 
+          options = list(pageLength = nrow(model_results_df)),  # Show all rows
+          rownames = FALSE)
+```
+
+
+
