@@ -1,78 +1,56 @@
-# Flight Delay Prediction
+# Airlines Delay Prediction
 
-This project explores various machine learning methods to predict flight delays using a dataset of flight records. Our goal is to handle class imbalance (delays vs. non-delays) by **assigning higher weights** to the minority class rather than performing up/down sampling.
+## Project Overview
+This project aims to develop a predictive model for airline flight delays. Initially, we attempted modeling using all available features, but the results showed no significant improvement. To address this, we utilized **logistic regression for feature selection** and then applied various **non-linear models** to improve prediction accuracy. Among these, **XGBoost**, which was not introduced in class, showed promising results in enhancing model performance.
 
-## 1. Overview
+## Approach
 
-- **Dataset:**  
-  - The dataset contains numeric and categorical features (e.g., `MONTH`, `DAY_OF_WEEK`, `DISTANCE_GROUP`, `PLANE_AGE`, `DEP_TIME_START`, etc.).
-  - The target variable is `DEP_DEL15` (0 = on-time, 1 = delayed).
+### 1. Data Collection
+- The dataset was sourced from the **Bureau of Transportation Statistics** and **NOAA**, as published on [Kaggle](https://www.kaggle.com/datasets/threnjen/2019-airline-delays-and-cancellations/data).
+- It consists of **6 million rows and 24 columns**, including airline information, weather conditions, and flight schedules.
 
-- **Imbalance Handling:**  
-  - Instead of upsampling or downsampling, we apply **class weighting** in Random Forest (`classwt`) and XGBoost (`scale_pos_weight`) to penalize misclassifications of the minority class more heavily.
+### 2. Feature Selection
+- We used **logistic regression** to identify the most relevant features and remove redundant ones.
+- A **Variance Inflation Factor (VIF) analysis** and **stepwise selection** helped refine the feature set.
 
-- **Modeling Techniques:**
-  1. **Logistic Regression** – Baseline model.
-  2. **Neural Network (nnet)** – Explores non-linear relationships.
-  3. **K Nearest Neighbor**
-  4. **Generalized Additive Models(GAM)**
-  5. **Boosted Tree**
-  6. **Decision Tree (rpart)** – Simple, interpretable model with potential for bias on imbalanced data.
-  7. **Random Forest (randomForest)** – Ensemble approach with built-in weighting (`classwt`) to handle imbalance.
-  8. **XGBoost** – Gradient boosting method, uses `scale_pos_weight` to adjust for class imbalance.
+### 3. Model Training
+We experimented with several machine learning models, including:
+- **Logistic Regression** (baseline)
+- **Decision Trees**
+- **Random Forest**
+- **Gradient Boosting**
+- **Generalized Additive Model (GAM)**
+- **Neural Networks**
+- **K-Nearest Neighbors (KNN)**
+- **Extreme Gradient Boosting (XGBoost)**
 
-## 2. Key Steps in the Code
+To handle class imbalance (since only **18.9%** of flights are delayed), we applied **class weighting techniques** and evaluated models based on:
+- **Precision**
+- **Recall**
+- **F1-score** (a priority metric due to class imbalance)
 
-1. **Data Loading & Cleaning:**
-   - Read `data_for_modeling_clean.csv`.
-   - Remove duplicates (`df <- df[!duplicated(df), ]`).
-   - Convert relevant columns to factors (e.g., `DEP_DEL15`, `MONTH`, etc.).
-   - Split into **train** and **test** sets using stratified sampling (`createDataPartition`).
+### 4. Model Performance & Results
+- **Baseline Logistic Regression** had poor recall, failing to detect delayed flights.
+- **Tree-based models** improved performance, but overfitting was a concern.
+- **XGBoost with class weighting (4:1)** provided the best balance of recall and precision, making it the most robust choice.
 
-2. **Feature Scaling (Optional):**
-   - Standardize numeric variables in the training set.
-   - Apply the same scaling to the test set to prevent data leakage.
+| Model                     | Accuracy | Precision | Recall | F1-score |
+|---------------------------|----------|-----------|--------|----------|
+| Logistic Regression       | 80.92%   | 43.14%    | 0.9%  | 1.75%   |
+| Decision Tree (Weighted)  | 65.06%   | 28.47%    | 55.33% | 37.6%    |
+| Neural Network  | 81.16%   | 56.45%    | 4.27% | 7.94%    |
+| KNN  | 76.9%   | 30.14%    | 16.27% | 21.14%    |
+| GAM  | 81.06%   | 56.32%    | 1.99% | 3.85%    |
+| Boosted Tree (Weighted)  | 65.85%   | 29.81%    | 58.67% | 39.53%    |
+| Random Forest (Weighted)  | 81.12%   | 52.38%    | 8.5%   | 14.63%   |
+| XGBoost (Weighted)    | **66.09%** | **29.95%** | **58.46%** | **39.61%** |
 
-3. **Model Training:**
-   - **Logistic Regression:** Fit a baseline GLM model, evaluate on test data.
-   - **Neural Network:** Perform cross-validation to tune size (hidden neurons) and decay, then train a final model.
-   - **Decision Tree:** Use `rpart` with cross-validation to find the best complexity parameter (cp). Optionally, apply `loss` matrix for weighting.
-   - **Random Forest:** Train with `randomForest(..., classwt = c("0"=1, "1"=2))` or other ratios to handle imbalance.
-   - **XGBoost:** Convert data to matrix form (`model.matrix`), set parameters (like `scale_pos_weight = 2`), run `xgb.cv` for best iteration, and train a final model.
+## Key Findings
+- **Departure time** is the strongest predictor of delays.
+- **Weather conditions** (precipitation, snow, wind speed) are crucial factors.
+- **Class weighting (4:1 ratio)** significantly improves recall for delayed flights.
+- **XGBoost outperformed other models**, providing the best trade-off between detecting delays and maintaining precision.
 
-4. **Evaluation Metrics:**
-   - **Accuracy** – Overall correctness of predictions.
-   - **Precision** – Of flights predicted delayed, how many are actually delayed?
-   - **Recall** – Of flights that are truly delayed, how many does the model catch?
-   - **F1-Score** – Harmonic mean of precision and recall, balances both.
-   - **ConfusionMatrix (caret)** – Summarizes predictions vs. actual classes.
-
-5. **Model Comparison:**
-   - Results (Accuracy, Precision, Recall, F1) are stored and compared across models.
-   - Weighted approaches often improve recall at the expense of accuracy or precision.
-
-## 3. How to Run
-
-1. **Install Packages** (if needed):
-   ```r
-   install.packages(c("caret", "nnet", "rpart", "MLmetrics", "gbm", "randomForest", "xgboost"))
-   ```
-2. **Execute the R Notebook or Script** that contains the above code.  
-3. **Inspect Model Outputs**:
-   - Compare Accuracy, Precision, Recall, and F1-Score to decide the best approach for your flight delay use case.
-
-## 4. Insights
-
-- **High Accuracy Doesn’t Always Help**: With imbalanced data, focusing on accuracy can result in extremely low recall for the minority class.  
-- **Class Weighting**: By penalizing misclassifications of delayed flights, we improve recall but often reduce overall accuracy.  
-- **Threshold Tuning**: Adjusting the 0.5 decision threshold can further balance precision and recall.
-
-## 5. License & Contributions
-
-- Feel free to open issues or PRs if you have suggestions or improvements.
-- Licensed under [MIT License](LICENSE).
-
----
-
-**Why No Upsampling?**  
-This code demonstrates using **class weights** instead of up/down sampling. Class weighting modifies the learning process to pay extra attention to the minority class. This often simplifies the workflow, avoids artificially replicating data, and can yield better recall for delayed flights.
+## Repository Information
+- **Dataset:** [Kaggle Link](https://www.kaggle.com/datasets/threnjen/2019-airline-delays-and-cancellations/data)
+- **Codebase:** [GitHub Repository](https://github.com/glenyslion/airlines_delay_prediction)
